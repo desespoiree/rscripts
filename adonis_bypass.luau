@@ -4,8 +4,6 @@ end
 
 local crashFns = {"Crash", "HardCrash", "GPUCrash", "RAMCrash", "KillClient", "SetFPS"}
 
-local Detected
-
 for _, elem in getgc(true)  do
     if
         typeof(elem) == "table"
