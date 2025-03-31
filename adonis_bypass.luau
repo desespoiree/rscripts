@@ -11,12 +11,13 @@ for _, elem in getgc(true)  do
         and typeof(elem.Detected) == "function"
         and rawget(elem, "RLocked")
     then
-        hookfunction(Detected, function(action, reason, nocrash)
-            --print(`Detected: Action: {action}, Reason: {reason}, Crashing: {not nocrash}`)
+
+        hookfunction(elem, function(action, reason, nocrash)
+            print(`Detected: Action: {action}, Reason: {reason}, Crashing: {not nocrash}`)
             return true
         end)
 
-        print("Hooked 'Detected' Function")
+        print("Hooked Detected Function")
     elseif
         typeof(elem) == "function"
      then
