@@ -12,7 +12,7 @@ for _, elem in getgc(true)  do
         and rawget(elem, "RLocked")
     then
 
-        hookfunction(elem, function(action, reason, nocrash)
+        hookfunction(elem.Detected, function(action, reason, nocrash)
             print(`Detected: Action: {action}, Reason: {reason}, Crashing: {not nocrash}`)
             return true
         end)
