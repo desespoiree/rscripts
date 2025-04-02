@@ -2,6 +2,16 @@ if not game.IsLoaded then
     game.Loaded:Wait()
 end
 
+local debugMod = false
+
+local function log(x)
+    if not debugMod then
+        return
+    end
+
+    print(x)
+end
+
 local crashFns = {"Crash", "HardCrash", "GPUCrash", "RAMCrash", "KillClient", "SetFPS"}
 
 for _, elem in getgc(true)  do
@@ -13,11 +23,11 @@ for _, elem in getgc(true)  do
     then
 
         hookfunction(elem.Detected, function(action, reason, nocrash)
-            print(`Detected: Action: {action}, Reason: {reason}, Crashing: {not nocrash}`)
+            log(`Detected: Action: {action}, Reason: {reason}, Crashing: {not nocrash}`)
             return true
         end)
 
-        print("Hooked Detected Function")
+        log("Hooked Detected Function")
     elseif
         typeof(elem) == "function"
      then
@@ -28,6 +38,6 @@ for _, elem in getgc(true)  do
         end
 
         hookfunction(elem, function()end)
-        print(`Hooked Lag/Crash function : {name}`)
+        log(`Hooked Lag/Crash function : {name}`)
     end
 end
