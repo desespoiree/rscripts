@@ -1,6 +1,7 @@
-local cloneservice = cloneservice or function(s) return s end
+local cloneservice = cloneservice or function(s)
+	return s
+end
 
-local RunService = cloneservice(game:GetService("RunService"))
 local UserInputService = cloneservice(game:GetService("UserInputService"))
 local CoreGui = cloneservice(game:GetService("CoreGui"))
 local Players = cloneservice(game:GetService("Players"))
@@ -14,6 +15,7 @@ local defaultSettings = {
 
 	ShowHealth = false,
 	HealthBarMode = "Filled",
+	HealthBarDisplayMode = "Left",
 
 	ShowBox = false,
 	BoxMode = "Drawing",
@@ -73,6 +75,8 @@ local Item = {
 }
 Item.__index = Item
 
+local REFRESH_RATE = 1 / 120
+
 type Setting = {
 	ShowDistance: boolean,
 	ShowName: boolean,
@@ -90,6 +94,7 @@ type Setting = {
 	--Specific to Objects with humanoid (Object must be a Model)
 	ShowHealth: boolean,
 	HealthBarMode: "Filled" | "Normal",
+	HealthBarDisplayMode: "Left" | "Right" | "Top" | "Bottom",
 
 	ShowBox: boolean,
 	BoxMode: "Drawing" | "3D",
@@ -129,6 +134,17 @@ local function Connect(signal: RBXScriptSignal, fn: (...any) -> nil): RBXScriptC
 	return con
 end
 
+local function newCamera()
+	if not workspace.CurrentCamera then
+		return
+	end
+
+	CurrentCamera = workspace.CurrentCamera
+
+	if Library.Connections.updateCon then Library.Connections.updateCon:Disconnect() end
+	Library.Connections.updateCon = CurrentCamera:GetPropertyChangedSignal("CFrame"):Connect(Update)
+end
+
 --
 local function Draw(name: string, config: table)
 	local drew = Drawing.new(name)
@@ -148,9 +164,6 @@ local function Create(className: string, config)
 	local instance = Instance.new(className)
 
 	for k, v in config do
-		-- if typeof(config[k]) ~= typeof(instance[k]) then
-		--     continue
-		-- end
 		if k == "Occluded" then
 			continue
 		end
@@ -193,46 +206,50 @@ end
 
 --Item
 function Item.new(flag: string, object: Model | BasePart)
+	assert(object, "Missing object")
+
 	local self = setmetatable({
 		flag = flag,
 		name = flag == "Players" and object.Name or flag,
 		object = object,
-		rootPart = (
+		rootPart = nil,
+		isABasePart = object:IsA("BasePart"),
+		humanoid = object:WaitForChild("Humanoid", 1),
+
+		player = Players:GetPlayerFromCharacter(object) or Players:FindFirstChild(object.Name),
+
+		hidden = true,
+		_lastUpdate = 0,
+
+		_ancestryChanged = nil,
+		_objectMoved = nil,
+		con2 = nil,
+		con3 = nil,
+		con4 = nil
+	}, Item)
+
+	local function childUpdate()
+		self.rootPart = (
 			object:IsA("Model")
 			and (
 				object:WaitForChild("HumanoidRootPart", 1)
 				or object.PrimaryPart
 				or object:FindFirstChildWhichIsA("BasePart")
 			)
-		) or object,
-
-		isABasePart = object:IsA("BasePart"),
-		humanoid = object:WaitForChild("Humanoid", 1),
-		player = Players:GetPlayerFromCharacter(object) or Players:FindFirstChild(object.Name),
-		hidden = true,
-
-		con1 = nil,
-		con2 = nil,
-	}, Item)
-
-	local function childUpdate()
-		self.rootPart = object:FindFirstChild("HumanoidRootPart")
-			or object.PrimaryPart
-			or object:FindFirstChildWhichIsA("BasePart")
+		) or object
 
 		if (not self.rootPart) or not object.Parent then
 			-- self:Destroy()
 			self.loaded = false
-			self:hide()
+			self:hide(true)
 		elseif self.rootPart and not self.loaded then
 			self.loaded = true
 		end
+
+		self:_trackMovements()
 	end
 
-	self.con1 = object.AncestryChanged:Connect(function()
-		childUpdate()
-	end)
-
+	self._ancestryChanged = object.AncestryChanged:Connect(childUpdate)
 	self.con2 = object.DescendantAdded:Connect(function(child)
 		if not self.loaded and child:IsA("BasePart") then
 			return childUpdate()
@@ -314,14 +331,16 @@ function Item:init()
 end
 
 function Item:hide(forcedToHide)
-	if self.hidden then
-		return
-	end
+	if self.hidden then return end
 	self.hidden = true
 
 	for _, v in self.Drawing do
 		v.Visible = false
 	end
+
+	-- if self._objectMoved then
+	-- 	self._objectMoved:Disconnect()
+	-- end
 
 	if not forcedToHide then return end
 	for _, v in self.Instances do
@@ -329,11 +348,22 @@ function Item:hide(forcedToHide)
 	end
 end
 
-function Item:update()
-	if not self.object or not self.object:IsDescendantOf(workspace) then
-		return
+function Item:_trackMovements()
+	if self._objectMoved then
+		self._objectMoved:Disconnect()
 	end
-	if not self.rootPart then
+
+	self._objectMoved = self.rootPart:GetPropertyChangedSignal("CFrame"):Connect(function()
+		if self.hidden then return end
+		self:update()
+	end)
+end
+
+function Item:update()
+	local now = os.clock()
+
+	if not self.object:IsDescendantOf(game) or not self.rootPart then
+		self:hide(true)
 		return
 	end
 
@@ -350,32 +380,33 @@ function Item:update()
 	local distance = DistanceFromCharacter(self.rootPart.Position)
 
 	self.shouldRender = not (
-		(
-			self.player
-			and Library.Players.Settings.TeamCheck
-			and not Library.Players.Settings.ShowTeam
-			and self.player.Team == (Library.CurrentTeam or LocalPlayer.Team)
-		)
-        or (config.AliveOnly and self.humanoid and self.humanoid.Health <= 0)
+		self.player
+		and Library.Players.Settings.TeamCheck
+		and not Library.Players.Settings.ShowTeam
+		and self.player.Team == (Library.CurrentTeam or LocalPlayer.Team)
 	)
 
-	if
-		not self.loaded
-		or not onScreen
-		or (config.MaxDistance and not IsInRange(self.rootPart.Position, config.MaxDistance))
-		or not self.shouldRender
-		or (config.VisibleOnly and not self:isVisible())
-	then
-		self:hide()
+	local visibleCheckFailed = config.VisibleOnly and not self:isVisible()
+	local distanceTooFar = config.MaxDistance and not IsInRange(self.rootPart.Position, config.MaxDistance)
+	local deadAndAliveCheck = config.AliveOnly and self.humanoid and self.humanoid.Health <= 0
+
+	if not self.loaded or not onScreen or not self.shouldRender or visibleCheckFailed or distanceTooFar or deadAndAliveCheck then
+		self:hide(deadAndAliveCheck)
 		self:updateChams()
-		-- self.Instances.highlight.Enabled = false
 		return
+	end
+
+	if now - self._lastUpdate < REFRESH_RATE then return end
+	self._lastUpdate = now
+
+	if self.hidden then
+		self.hidden = false
+		-- self:_trackMovements()
 	end
 
 	self:updateChams()
 
-	self.hidden = false
-
+	-- Box
 	local boxHeight = bottom.Y - top.Y
 	local boxWidth = boxHeight / 2
 	local topLeft = Vector2.new(top.X - boxWidth / 2, top.Y)
@@ -388,6 +419,7 @@ function Item:update()
 		draw.Box.Visible = false
 	end
 
+	-- Name
 	if config.ShowName then
 		draw.Name.Position = Vector2.new(top.X, top.Y - 16)
 		draw.Name.Text = self.object.Name
@@ -396,6 +428,7 @@ function Item:update()
 		draw.Name.Visible = false
 	end
 
+	-- Distance
 	if config.ShowDistance then
 		draw.Distance.Position = Vector2.new(top.X, bottom.Y + 2)
 		draw.Distance.Text = string.format("%d Studs", math.floor(distance))
@@ -404,18 +437,13 @@ function Item:update()
 		draw.Distance.Visible = false
 	end
 
-	if config.ShowHealth and (self.humanoid or self._getHealth) then
-		if self._getHealth then
-			self._getHealth()
-		end
-
-		local hpPercent = math.clamp(self.humanoid.Health / self.humanoid.MaxHealth, 0, 1)
-
+	-- Health
+	if config.ShowHealth and self.humanoid then
+		local hpPercent = math.clamp(self:_getHealthPercentage(), 0, 1)
 		local barX = topLeft.X - 6
 		local barHeight = boxHeight
 		local filledHeight = barHeight * hpPercent
 		local missingHeight = barHeight - filledHeight
-
 		local barTopY = topLeft.Y
 
 		draw.HealthBarOutline.Position = Vector2.new(barX - 1, barTopY - 1)
@@ -439,7 +467,6 @@ function Item:update()
 			draw.HealthBar.To = Vector2.new(barX, barTopY + barHeight)
 			draw.HealthBar.Color = Color3.fromRGB(255 - (hpPercent * 255), hpPercent * 255, 0)
 			draw.HealthBar.Visible = true
-
 			draw.TopHealthBar.Visible = false
 		end
 	else
@@ -448,6 +475,7 @@ function Item:update()
 		draw.HealthBarOutline.Visible = false
 	end
 
+	-- Tracer
 	if config.ShowTracer then
 		draw.Tracer.From = Library.tracerOrigin
 		draw.Tracer.To = Vector2.new(top.X, bottom.Y)
@@ -496,10 +524,17 @@ function Item:getColor()
 	return self.Settings.Color
 end
 
+function Item:_getHealthPercentage()
+	local hum = self.humanoid
+	if not hum then return 0 end
+	return hum.Health / hum.MaxHealth
+end
+
 function Item:isVisible()
 	if not self.rootPart then
 		return
 	end
+
 	local cameraPos = CurrentCamera.CFrame.Position
 	local objectPos = self.rootPart.Position
 
@@ -508,7 +543,11 @@ function Item:isVisible()
 	rayParms.RespectCanCollide = true
 	rayParms.FilterType = Enum.RaycastFilterType.Exclude
 
-	local ray = workspace:Raycast(cameraPos, objectPos - cameraPos.Unit * (cameraPos - objectPos).Magnitude, rayParms)
+	local ray = workspace:Raycast(
+		cameraPos,
+		objectPos - cameraPos.Unit * (cameraPos - objectPos).Magnitude,
+		rayParms
+	)
 
 	return ray == nil
 end
@@ -526,18 +565,17 @@ function Item:Destroy()
 		end
 	end
 
-	self.con1:Disconnect()
+	self._ancestryChanged:Disconnect()
+	if self._objectMoved then self._objectMoved:Disconnect() end
 	self.con2:Disconnect()
 	self.con3:Disconnect()
 	self.con4:Disconnect()
-
-	-- self.Drawing = nil
-	-- self.object = nil
-	-- self.haveHumanoid = nil
 end
 --
 
 function Update()
+	if not Library.Enabled then return end
+
 	Library.tracerOrigin = GetTracerOrigin()
 
 	for _, group in Library.Items do
@@ -598,21 +636,17 @@ function Library:createGroup(flag: string)
 end
 
 function Library:Enable(state: boolean)
-	if self.Connections.updateCon then
-		self.Connections.updateCon:Disconnect()
-	end
+	Library.Enabled = state
 
 	if not state then
 		for _, group in Library.Items do
 			for _, item in group.List do
-				item:hide()
+				item:hide(true)
 			end
 		end
 
 		return
 	end
-
-	self.Connections.updateCon = RunService.RenderStepped:Connect(Update)
 end
 
 function Library:Destroy()
@@ -626,7 +660,6 @@ function Library:Destroy()
 		con:Disconnect()
 	end
 end
-
 --
 local function CreatePlayerESP(player: Player)
 	if player == LocalPlayer then
@@ -656,11 +689,7 @@ for _, player in Players:GetPlayers() do
 end
 
 Connect(Players.PlayerAdded, CreatePlayerESP)
-Connect(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
-	if not workspace.CurrentCamera then
-		return
-	end
-	CurrentCamera = workspace.CurrentCamera
-end)
+Connect(workspace:GetPropertyChangedSignal("CurrentCamera"), newCamera)
+task.spawn(newCamera)
 
 return Library
