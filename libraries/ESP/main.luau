@@ -392,7 +392,6 @@ function Item:update()
 
 	if not self.loaded or not onScreen or not self.shouldRender or visibleCheckFailed or distanceTooFar or deadAndAliveCheck then
 		self:hide(deadAndAliveCheck)
-		self:updateChams()
 		return
 	end
 
