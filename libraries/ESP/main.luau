@@ -2,6 +2,7 @@ local cloneservice = cloneservice or function(s)
 	return s
 end
 
+local RunService = cloneservice(game:GetService("RunService"))
 local UserInputService = cloneservice(game:GetService("UserInputService"))
 local CoreGui = cloneservice(game:GetService("CoreGui"))
 local Players = cloneservice(game:GetService("Players"))
@@ -220,23 +221,28 @@ function Item.new(flag: string, object: Model | BasePart)
 
 		hidden = true,
 		_lastUpdate = 0,
+		currentHp = 0,
 
 		_ancestryChanged = nil,
 		_objectMoved = nil,
+		_healthChanged = nil,
 		con2 = nil,
 		con3 = nil,
 		con4 = nil
 	}, Item)
 
 	local function childUpdate()
-		self.rootPart = (
-			object:IsA("Model")
-			and (
-				object:WaitForChild("HumanoidRootPart", 1)
+		local newRoot
+		if object:IsA("Model") then
+			newRoot = object:FindFirstChild("HumanoidRootPart")
+				or object:FindFirstChild("Root")
 				or object.PrimaryPart
 				or object:FindFirstChildWhichIsA("BasePart")
-			)
-		) or object
+		else
+			newRoot = object
+		end
+
+		self.rootPart = newRoot
 
 		if (not self.rootPart) or not object.Parent then
 			-- self:Destroy()
@@ -247,6 +253,7 @@ function Item.new(flag: string, object: Model | BasePart)
 		end
 
 		self:_trackMovements()
+		self:_trackHealth()
 	end
 
 	self._ancestryChanged = object.AncestryChanged:Connect(childUpdate)
@@ -351,15 +358,56 @@ end
 function Item:_trackMovements()
 	if self._objectMoved then
 		self._objectMoved:Disconnect()
+		self._objectMoved = nil
 	end
+
+	if not self.rootPart then return end
 
 	self._objectMoved = self.rootPart:GetPropertyChangedSignal("CFrame"):Connect(function()
 		if self.hidden then return end
+		-- print("updating by cf")
 		self:update()
 	end)
 end
 
-function Item:update()
+function Item:_trackHealth()
+	if self._healthChanged then
+		self._healthChanged:Disconnect()
+		self._healthChanged = nil
+	end
+
+	local humanoid = self.humanoid
+	if not humanoid then return end
+
+	local function update()
+		self.currentHp = math.clamp(humanoid.Health / (humanoid.MaxHealth or 100), 0, 1)
+		self:update(true)
+	end
+
+	task.spawn(update)
+
+	if humanoid.ClassName == "Humanoid" then -- instance
+		self._healthChanged = humanoid:GetPropertyChangedSignal("Health"):Connect(update)
+	else -- custom humanoids
+		local currentHp = humanoid.Health
+		local lastUpdate = 0
+
+		self._healthChanged = RunService.Stepped:Connect(function(steppedTime)
+			if steppedTime - lastUpdate < REFRESH_RATE then return end
+			lastUpdate = steppedTime
+
+			local newHP = humanoid.Health
+
+			if currentHp ~= newHP then
+				-- print("update", currentHp, newHP)
+				currentHp = newHP
+				update()
+			end
+		end)
+	end
+end
+
+function Item:update(forcedUpdate)
 	local now = os.clock()
 
 	if not self.object:IsDescendantOf(game) or not self.rootPart then
@@ -395,12 +443,11 @@ function Item:update()
 		return
 	end
 
-	if now - self._lastUpdate < REFRESH_RATE then return end
+	if not forcedUpdate and now - self._lastUpdate < REFRESH_RATE then return end
 	self._lastUpdate = now
 
 	if self.hidden then
 		self.hidden = false
-		-- self:_trackMovements()
 	end
 
 	self:updateChams()
@@ -438,7 +485,7 @@ function Item:update()
 
 	-- Health
 	if config.ShowHealth and self.humanoid then
-		local hpPercent = math.clamp(self:_getHealthPercentage(), 0, 1)
+		local hpPercent = self.currentHp
 		local barX = topLeft.X - 6
 		local barHeight = boxHeight
 		local filledHeight = barHeight * hpPercent
@@ -523,12 +570,6 @@ function Item:getColor()
 	return self.Settings.Color
 end
 
-function Item:_getHealthPercentage()
-	local hum = self.humanoid
-	if not hum then return 0 end
-	return hum.Health / hum.MaxHealth
-end
-
 function Item:isVisible()
 	if not self.rootPart then
 		return
@@ -566,6 +607,7 @@ function Item:Destroy()
 
 	self._ancestryChanged:Disconnect()
 	if self._objectMoved then self._objectMoved:Disconnect() end
+	if self._healthChanged then self._healthChanged:Disconnect() end
 	self.con2:Disconnect()
 	self.con3:Disconnect()
 	self.con4:Disconnect()
