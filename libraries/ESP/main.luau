@@ -1,4 +1,4 @@
-local cloneservice = cloneservice or function(s)
+local cloneservice = function(s)
 	return s
 end
 
@@ -22,7 +22,15 @@ local defaultSettings = {
 	BoxMode = "Drawing",
 
 	ShowTracer = false,
+
 	Color = Color3.fromRGB(255, 255, 255),
+	NameColor = Color3.fromRGB(255, 255, 255),
+	DistanceColor = Color3.fromRGB(255, 255, 255),
+	BoxColor = Color3.fromRGB(255, 255, 255),
+	TracerColor = Color3.fromRGB(255, 255, 255),
+	PrimaryHealthColor = Color3.fromRGB(0, 255, 0),
+	SecondaryHealthColor = Color3.fromRGB(255, 0, 0),
+
 
 	VisibleOnly = false,
 	AliveOnly = false,
@@ -37,6 +45,7 @@ local defaultSettings = {
 		OutlineTransparency = 0,
 		FillTransparency = 1,
 	},
+
 	-- MaxDistance = 9e9
 }
 
@@ -50,13 +59,7 @@ local Library = {
 		ShowTeam = false,
 	},
 
-	DrawedShits = {},
 	Connections = {},
-
-	TeamColors = {
-		Ally = Color3.fromRGB(160, 255, 82),
-		Enemy = Color3.fromRGB(160, 255, 82),
-	},
 
 	Enabled = false,
 
@@ -69,57 +72,10 @@ local Library = {
 	CustomRootPart = nil,
 }
 
-Library.Items["Players"] = Library.Players -- 2025 cyclic hack
-
-local Item = {
-	Settings = defaultSettings,
-}
+local Item = {}
 Item.__index = Item
 
 local REFRESH_RATE = 1 / 120
-
-type Setting = {
-	ShowDistance: boolean,
-	ShowName: boolean,
-
-	TracerEnabled: boolean,
-	TracerMode: "Mouse" | "Center" | "Top" | "Bottom",
-
-	MaxDistance: number?,
-
-	Color: Color3, -- Players are Ally, Enemy or Team.Color
-
-	VisibleOnly: boolean?,
-	AliveOnly: boolean?,
-
-	--Specific to Objects with humanoid (Object must be a Model)
-	ShowHealth: boolean,
-	HealthBarMode: "Filled" | "Normal",
-	HealthBarDisplayMode: "Left" | "Right" | "Top" | "Bottom",
-
-	ShowBox: boolean,
-	BoxMode: "Drawing" | "3D",
-
-	ChamsEnabled: boolean?,
-	Chams: {
-		Occluded: boolean,
-
-		OutlineColor: Color3,
-		FillColor: Color3,
-
-		OutlineTransparency: number,
-		FillTransparency: number,
-	},
-}
-
-type DPlayer = {
-	Settings: Setting,
-}
-
-type Items = {
-	Settings: Setting,
-	List: { number: Item },
-}
 
 local function DistanceFromCharacter(from: Vector3)
 	if Library.CustomRootPart then
@@ -278,13 +234,14 @@ function Item.new(flag: string, object: Model | BasePart)
 	end)
 
 	self:init()
+	self:updateColors()
 
 	childUpdate()
 
 	return self
 end
 
-function Item:getSettings(): Setting
+function Item:getSettings()
 	return Library.Items[self.flag].Settings
 end
 
@@ -379,8 +336,9 @@ function Item:_trackHealth()
 	local humanoid = self.humanoid
 	if not humanoid then return end
 
-	local function update()
+	local function update(forced)
 		self.currentHp = math.clamp(humanoid.Health / (humanoid.MaxHealth or 100), 0, 1)
+		if self.hidden and not forced then return end
 		self:update(true)
 	end
 
@@ -389,7 +347,7 @@ function Item:_trackHealth()
 	if humanoid.ClassName == "Humanoid" then -- instance
 		self._healthChanged = humanoid:GetPropertyChangedSignal("Health"):Connect(update)
 	else -- custom humanoids
-		local currentHp = humanoid.Health
+		local currentHp = nil-- humanoid.Health
 		local lastUpdate = 0
 
 		self._healthChanged = RunService.Stepped:Connect(function(steppedTime)
@@ -401,7 +359,7 @@ function Item:_trackHealth()
 			if currentHp ~= newHP then
 				-- print("update", currentHp, newHP)
 				currentHp = newHP
-				update()
+				update(true)
 			end
 		end)
 	end
@@ -435,11 +393,11 @@ function Item:update(forcedUpdate)
 	)
 
 	local visibleCheckFailed = config.VisibleOnly and not self:isVisible()
-	local distanceTooFar = config.MaxDistance and not IsInRange(self.rootPart.Position, config.MaxDistance)
+	self.distanceTooFar = config.MaxDistance and not IsInRange(self.rootPart.Position, config.MaxDistance)
 	local deadAndAliveCheck = config.AliveOnly and self.humanoid and self.humanoid.Health <= 0
 
-	if not self.loaded or not onScreen or not self.shouldRender or visibleCheckFailed or distanceTooFar or deadAndAliveCheck then
-		self:hide(deadAndAliveCheck)
+	if not self.loaded or not onScreen or not self.shouldRender or visibleCheckFailed or self.distanceTooFar or deadAndAliveCheck then
+		self:hide(self.distanceTooFar or deadAndAliveCheck)
 		return
 	end
 
@@ -448,6 +406,7 @@ function Item:update(forcedUpdate)
 
 	if self.hidden then
 		self.hidden = false
+		self:updateDrawedItemsVisibility()
 	end
 
 	self:updateChams()
@@ -501,12 +460,10 @@ function Item:update(forcedUpdate)
 		if config.HealthBarMode == "Filled" then
 			draw.TopHealthBar.From = Vector2.new(barX, barTopY + missingHeight)
 			draw.TopHealthBar.To = Vector2.new(barX, barTopY + barHeight)
-			draw.TopHealthBar.Color = Color3.fromRGB(0, 255, 0)
 			draw.TopHealthBar.Visible = true
 
 			draw.HealthBar.From = Vector2.new(barX, barTopY)
 			draw.HealthBar.To = Vector2.new(barX, barTopY + missingHeight)
-			draw.HealthBar.Color = Color3.fromRGB(255, 0, 0)
 			draw.HealthBar.Visible = true
 		else
 			draw.HealthBar.From = Vector2.new(barX, barTopY + (barHeight - filledHeight))
@@ -556,18 +513,46 @@ function Item:updateChams()
 	highlight.Adornee = self.object
 end
 
-function Item:getColor()
-	if self.flag == "Players" and self.player then
-		local team: Team = self.player.Team
+function Item:updateColors()
+    local config = self:getSettings()
+    local draw = self.Drawing
 
-		if team == LocalPlayer.Team then
-			return Library.TeamColors.Ally
-		else
-			return Library.TeamColors[team.Name] or Library.TeamColors.Enemy or team.TeamColor.Color
-		end
-	end
+    draw.Name.Color = config.NameColor or config.Color
+    draw.Distance.Color = config.DistanceColor or config.Color
+    draw.Box.Color = config.BoxColor or config.Color
+    draw.Tracer.Color = config.TracerColor or config.Color
 
-	return self.Settings.Color
+    draw.TopHealthBar.Color = config.PrimaryHealthColor or Color3.fromRGB(0, 255, 0)
+    draw.HealthBar.Color = config.SecondaryHealthColor or Color3.fromRGB(255, 0, 0)
+end
+
+function Item:updateDrawedItemsVisibility()
+	if self.hidden then return end
+
+    local config = self:getSettings()
+    local draw   = self.Drawing
+
+    draw.Box.Visible = config.ShowBox
+    draw.Name.Visible = config.ShowName
+    draw.Distance.Visible = config.ShowDistance
+
+    if config.ShowHealth and self.humanoid then
+        draw.HealthBarOutline.Visible = true
+
+        if config.HealthBarMode == "Filled" then
+            draw.TopHealthBar.Visible   = true
+            draw.HealthBar.Visible      = true
+        else
+            draw.TopHealthBar.Visible   = false
+            draw.HealthBar.Visible      = true
+        end
+    else
+        draw.HealthBarOutline.Visible = false
+        draw.TopHealthBar.Visible     = false
+        draw.HealthBar.Visible        = false
+    end
+
+    draw.Tracer.Visible = config.ShowTracer
 end
 
 function Item:isVisible()
@@ -631,49 +616,72 @@ function Update()
 end
 
 --
-function Library.newItem(flag: string, object: Model | BasePart, itemSettings: Setting?)
+function Library.newItem(flag: string, object: Model | BasePart)
 	local itemTable = Library.Items[flag]
 
 	if not itemTable then
 		itemTable = Library:createGroup(flag)
 	end
 
-	-- if not itemTable._sexy then
-	--     warn("not sexied", flag)
-	--     itemTable._sexy = true
-
-	--     setmetatable(itemTable.Settings, {
-	--         __newindex = function(t, k, v)
-	--             print("__newindex", t, k, v)
-	--             rawset(t, k, v)
-	--         end,
-	--     })
-	-- end
-
-	-- if flag == "Players" then
-	--     setti
-	-- end
-
 	local item = Item.new(flag, object)
-	-- item.Settings = createSettingsProxy({}, Setting)
 	table.insert(itemTable.List, item)
 	return item
 end
 
-function Library:createGroup(flag: string)
-	if Library.Items[flag] then
-		return Library.Items[flag]
-		-- return error("You cannot create a group that already exist", 2)
-	end
+function Library:createGroup(flag)
+    if self.Items[flag] then
+        return self.Items[flag]
+    end
 
-	local itemTable = {
-		Enabled = false,
-		List = {},
-		Settings = table.clone(defaultSettings),
-	}
+    local itemTable
+    local realSettings = table.clone(defaultSettings)
 
-	Library.Items[flag] = itemTable
-	return itemTable
+    local proxy = setmetatable({}, {
+        __index = realSettings,
+        __newindex = function(_, k, v)
+            realSettings[k] = v
+
+            if string.find(k, "Color") then
+                for _, item in itemTable.List do
+                    item:updateColors()
+                end
+			elseif typeof(v) == "boolean" then
+				for _, item in itemTable.List do
+                    item:updateDrawedItemsVisibility()
+                end
+            end
+        end
+    })
+
+    itemTable = setmetatable({
+        List = {},
+        Settings = proxy
+    }, {
+        __newindex = function(self, k, v)
+            if k == "Enabled" then
+                rawset(self, "_Enabled", v)
+                for _, item in self.List do
+                    if v then
+                        item:update(true)
+                    else
+                        item:hide(true)
+                    end
+                end
+            else
+                rawset(self, k, v)
+            end
+        end,
+        __index = function(self, k)
+            if k == "Enabled" then
+                return rawget(self, "_Enabled")
+            end
+
+            return rawget(self, k)
+        end
+    })
+
+    self.Items[flag] = itemTable
+    return itemTable
 end
 
 function Library:Enable(state: boolean)
@@ -702,20 +710,16 @@ function Library:Destroy()
 	end
 end
 --
+
 local function CreatePlayerESP(player: Player)
-	if player == LocalPlayer then
-		return
-	end
+	if player == LocalPlayer then return end
+	local character = player.Character
 
-	local function characterAdded(character: Model)
-		repeat
-			task.wait()
-		until character.Parent and character:FindFirstChildWhichIsA("BasePart") or not player.Parent
-		if not player.Parent then
-			return
-		end
+	local function characterAdded(newCharacter: Model)
+		repeat task.wait() until newCharacter.Parent and newCharacter:FindFirstChildWhichIsA("BasePart") or not player.Parent or character ~= newCharacter
+		if not player.Parent or character ~= newCharacter then return end
 
-		Library.newItem("Players", character)
+		Library.newItem("Players", newCharacter)
 	end
 
 	Connect(player.CharacterAdded, characterAdded)
@@ -724,6 +728,8 @@ local function CreatePlayerESP(player: Player)
 		characterAdded(player.Character)
 	end
 end
+
+Library.Players = Library:createGroup("Players")
 
 for _, player in Players:GetPlayers() do
 	task.spawn(CreatePlayerESP, player)
