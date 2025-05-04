@@ -302,10 +302,6 @@ function Item:hide(forcedToHide)
 		v.Visible = false
 	end
 
-	-- if self._objectMoved then
-	-- 	self._objectMoved:Disconnect()
-	-- end
-
 	if not forcedToHide then return end
 	for _, v in self.Instances do
 	    v.Enabled = false
@@ -336,9 +332,9 @@ function Item:_trackHealth()
 	local humanoid = self.humanoid
 	if not humanoid then return end
 
-	local function update(forced)
+	local function update()
 		self.currentHp = math.clamp(humanoid.Health / (humanoid.MaxHealth or 100), 0, 1)
-		if self.hidden and not forced then return end
+		if self.hidden then return end
 		self:update(true)
 	end
 
@@ -347,19 +343,18 @@ function Item:_trackHealth()
 	if humanoid.ClassName == "Humanoid" then -- instance
 		self._healthChanged = humanoid:GetPropertyChangedSignal("Health"):Connect(update)
 	else -- custom humanoids
-		local currentHp = nil-- humanoid.Health
+		local currentHp = nil
 		local lastUpdate = 0
 
 		self._healthChanged = RunService.Stepped:Connect(function(steppedTime)
-			if steppedTime - lastUpdate < REFRESH_RATE then return end
+			if self.hidden or steppedTime - lastUpdate < REFRESH_RATE then return end
 			lastUpdate = steppedTime
 
 			local newHP = humanoid.Health
 
 			if currentHp ~= newHP then
-				-- print("update", currentHp, newHP)
 				currentHp = newHP
-				update(true)
+				update()
 			end
 		end)
 	end
@@ -407,6 +402,8 @@ function Item:update(forcedUpdate)
 	if self.hidden then
 		self.hidden = false
 		self:updateDrawedItemsVisibility()
+		self:_trackHealth()
+		self:_trackMovements()
 	end
 
 	self:updateChams()
