@@ -31,7 +31,6 @@ local defaultSettings = {
 	PrimaryHealthColor = Color3.fromRGB(0, 255, 0),
 	SecondaryHealthColor = Color3.fromRGB(255, 0, 0),
 
-
 	VisibleOnly = false,
 	AliveOnly = false,
 
@@ -128,10 +127,6 @@ local function Create(className: string, config)
 		instance[k] = v
 	end
 
-	if not instance.Parent then
-		instance.Parent = CoreGui
-	end
-
 	return instance
 end
 
@@ -201,7 +196,6 @@ function Item.new(flag: string, object: Model | BasePart)
 		self.rootPart = newRoot
 
 		if (not self.rootPart) or not object.Parent then
-			-- self:Destroy()
 			self.loaded = false
 			self:hide(true)
 		elseif self.rootPart and not self.loaded then
@@ -289,9 +283,7 @@ function Item:init()
 			Visible = false,
 		}),
 	}
-	self.Instances = {
-		highlight = Create("Highlight", defaultSettings.Chams),
-	}
+	self.Highlight = Create("Highlight", defaultSettings.Chams)
 end
 
 function Item:hide(forcedToHide)
@@ -302,10 +294,12 @@ function Item:hide(forcedToHide)
 		v.Visible = false
 	end
 
+	if self._objectMoved then self._objectMoved:Disconnect() end
+	if self._healthChanged then self._healthChanged:Disconnect() end
+
 	if not forcedToHide then return end
-	for _, v in self.Instances do
-	    v.Enabled = false
-	end
+	-- self.Highlight.Enabled = false
+	self.Highlight.Parent = nil
 end
 
 function Item:_trackMovements()
@@ -318,7 +312,6 @@ function Item:_trackMovements()
 
 	self._objectMoved = self.rootPart:GetPropertyChangedSignal("CFrame"):Connect(function()
 		if self.hidden then return end
-		-- print("updating by cf")
 		self:update()
 	end)
 end
@@ -371,6 +364,12 @@ function Item:update(forcedUpdate)
 	local config = self:getSettings()
 	local draw = self.Drawing
 
+	if config.MaxDistance and not IsInRange(self.rootPart.Position, config.MaxDistance) then
+		self.shouldRender = false
+		self:hide(true)
+		return
+	end
+
 	local objectCF, objectSize = self.object:GetBoundingBox()
 	objectSize = objectSize.Y / 2
 
@@ -387,8 +386,12 @@ function Item:update(forcedUpdate)
 		and self.player.Team == (Library.CurrentTeam or LocalPlayer.Team)
 	)
 
+	if config.VisibleOnly and not self:isVisible() then
+		self:hide(true)
+		return
+	end
+
 	local visibleCheckFailed = config.VisibleOnly and not self:isVisible()
-	self.distanceTooFar = config.MaxDistance and not IsInRange(self.rootPart.Position, config.MaxDistance)
 	local deadAndAliveCheck = config.AliveOnly and self.humanoid and self.humanoid.Health <= 0
 
 	if not self.loaded or not onScreen or not self.shouldRender or visibleCheckFailed or self.distanceTooFar or deadAndAliveCheck then
@@ -486,7 +489,7 @@ function Item:update(forcedUpdate)
 end
 
 function Item:updateChams()
-	local highlight: Highlight = self.Instances.highlight
+	local highlight: Highlight = self.Highlight
 	local settings = self:getSettings()
 	local enabled = settings.ChamsEnabled
 
@@ -498,21 +501,20 @@ function Item:updateChams()
 	end
 
 	local config = settings.Chams
+
 	highlight.DepthMode = (self.hidden or config.Occluded) and Enum.HighlightDepthMode.Occluded
 		or Enum.HighlightDepthMode.AlwaysOnTop
 
-	highlight.OutlineColor = config.OutlineColor
-	highlight.FillColor = config.FillColor
-
-	highlight.OutlineTransparency = config.OutlineTransparency
-	highlight.FillTransparency = config.FillTransparency
-
-	highlight.Adornee = self.object
+	highlight.Parent = self.object
+	-- highlight.Adornee = self.object
 end
 
 function Item:updateColors()
     local config = self:getSettings()
+	local highlightConfig = config.Chams
+
     local draw = self.Drawing
+	local highlight = self.Highlight
 
     draw.Name.Color = config.NameColor or config.Color
     draw.Distance.Color = config.DistanceColor or config.Color
@@ -521,6 +523,12 @@ function Item:updateColors()
 
     draw.TopHealthBar.Color = config.PrimaryHealthColor or Color3.fromRGB(0, 255, 0)
     draw.HealthBar.Color = config.SecondaryHealthColor or Color3.fromRGB(255, 0, 0)
+
+	highlight.OutlineColor = highlightConfig.OutlineColor
+	highlight.FillColor = highlightConfig.FillColor
+
+	highlight.OutlineTransparency = highlightConfig.OutlineTransparency
+	highlight.FillTransparency = highlightConfig.FillTransparency
 end
 
 function Item:updateDrawedItemsVisibility()
@@ -552,16 +560,14 @@ function Item:updateDrawedItemsVisibility()
     draw.Tracer.Visible = config.ShowTracer
 end
 
-function Item:isVisible()
-	if not self.rootPart then
-		return
-	end
+function Item:isVisible()--GetPartsObscuringTarget
+	if not self.rootPart then return end
 
 	local cameraPos = CurrentCamera.CFrame.Position
 	local objectPos = self.rootPart.Position
 
 	local rayParms = RaycastParams.new()
-	rayParms.FilterDescendantsInstances = { LocalPlayer.Character, self.object }
+	rayParms.FilterDescendantsInstances = { Library.CustomRootPart and Library.CustomRootPart.Parent or LocalPlayer.Character, self.object, CurrentCamera }
 	rayParms.RespectCanCollide = true
 	rayParms.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -575,17 +581,11 @@ function Item:isVisible()
 end
 
 function Item:Destroy()
-	if self.Drawing then
-		for _, drawed in self.Drawing do
-			drawed:Remove()
-		end
+	for _, drawed in self.Drawing do
+		drawed:Remove()
 	end
 
-	if self.Instances then
-		for _, instance in self.Instances do
-			instance:Destroy()
-		end
-	end
+	self.Highlight:Destroy()
 
 	self._ancestryChanged:Disconnect()
 	if self._objectMoved then self._objectMoved:Disconnect() end
@@ -633,17 +633,29 @@ function Library:createGroup(flag)
     local itemTable
     local realSettings = table.clone(defaultSettings)
 
+    local chamsTable = table.clone(defaultSettings.Chams)
+    local chamsProxy = setmetatable({}, {
+        __index = chamsTable,
+        __newindex = function(_, k, v)
+            chamsTable[k] = v
+            for _, item in itemTable.List do
+                item:updateColors()
+            end
+        end
+    })
+    realSettings.Chams = chamsProxy
+
     local proxy = setmetatable({}, {
         __index = realSettings,
         __newindex = function(_, k, v)
             realSettings[k] = v
 
-            if string.find(k, "Color") then
+            if string.find(k, "Color") or string.find(k, "Transparency") then
                 for _, item in itemTable.List do
                     item:updateColors()
                 end
-			elseif typeof(v) == "boolean" then
-				for _, item in itemTable.List do
+            elseif typeof(v) == "boolean" then
+                for _, item in itemTable.List do
                     item:updateDrawedItemsVisibility()
                 end
             end
@@ -672,7 +684,6 @@ function Library:createGroup(flag)
             if k == "Enabled" then
                 return rawget(self, "_Enabled")
             end
-
             return rawget(self, k)
         end
     })
