@@ -229,8 +229,10 @@ function Item.new(flag: string, object: Model | BasePart)
 
 	self:init()
 	self:updateColors()
-
 	childUpdate()
+
+	self:update(true)
+
 
 	return self
 end
@@ -491,11 +493,11 @@ end
 function Item:updateChams()
 	local highlight: Highlight = self.Highlight
 	local settings = self:getSettings()
-	local enabled = settings.ChamsEnabled
+	local enabled = settings.ChamsEnabled and self.shouldRender and not self.hidden
 
 	highlight.Enabled = enabled
 
-	if not enabled or not self.shouldRender then
+	if not enabled then
 		highlight.Enabled = false
 		return
 	end
