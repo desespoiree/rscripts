@@ -5637,8 +5637,10 @@ function Library:CreateWindow(...)
                     local OldMouseIconState = InputService.MouseIconEnabled
                     local OldMouseBehavior = InputService.MouseBehavior
 
-                    pcall(function() RunService:UnbindFromRenderStep("LinoriaCursor") end)
-                    RunService:BindToRenderStep("__LinoriaCursor", Enum.RenderPriority.Camera.Value - 1, function()
+                    local connection
+                    -- pcall(function() RunService:UnbindFromRenderStep("__LinoriaCursor") end)
+                    -- RunService:BindToRenderStep("__LinoriaCursor", 1000, function()
+                    connection = RunService.Stepped:Connect(function()
                         InputService.MouseIconEnabled = not Library.ShowCustomCursor
                         InputService.MouseBehavior = Enum.MouseBehavior.Default
 
@@ -5660,7 +5662,8 @@ function Library:CreateWindow(...)
 
                             if Cursor then Cursor:Destroy() end
                             if CursorOutline then CursorOutline:Destroy() end
-                            RunService:UnbindFromRenderStep("__LinoriaCursor")
+                            connection:Disconnect()
+                            -- RunService:UnbindFromRenderStep("__LinoriaCursor")
                         end
                     end)
                 end));
